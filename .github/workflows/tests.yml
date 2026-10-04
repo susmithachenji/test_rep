@@ -1,0 +1,79 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # nightly re-run: the demo pages shuffle data on every load
+    - cron: "17 6 * * *"
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    name: pytest (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python-version: "3.13"
+          - os: ubuntu-latest
+            python-version: "3.12"
+          - os: windows-latest
+            python-version: "3.13"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Chromium and OS dependencies
+        if: runner.os != 'Windows'
+        run: python -m playwright install --with-deps chromium
+
+      - name: Install Chromium
+        if: runner.os == 'Windows'
+        run: python -m playwright install chromium
+
+      - name: Run pytest
+        env:
+          HEADLESS: "true"
+          PYTHONUNBUFFERED: "1"
+        run: pytest -ra --junitxml=reports/junit.xml
+
+      - name: Summarise results
+        if: always()
+        env:
+          JOB_LABEL: ${{ matrix.os }} / py${{ matrix.python-version }}
+        run: python .github/scripts/summarize_junit.py
+
+      - name: Upload HTML report and failure screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-report-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: |
+            reports/report.html
+            reports/artifacts/
+          if-no-files-found: warn
+          retention-days: 14
